@@ -620,7 +620,7 @@ function formatFraction(value: number, fmt: string): string {
   // Literals sit *outside* the "?" padding, which belongs to the fraction
   // rather than to the field: 2.5 under "$??/??" is "$ 5/ 2", not " $5/ 2".
   // The prefix leads the whole part and the suffix trails the denominator.
-  // The prefix also leads the sign, matching formatNumber's "$-1,234.50".
+  // The sign leads the prefix, matching formatNumber's "-$1,234.50".
   const head = extractLiterals(fmt.slice(0, fracAt))
   // The tail is all literal: nothing after the denominator has a number to
   // render, so expandLiterals — quotes and escapes to text — is the whole job.
@@ -679,10 +679,14 @@ function formatFraction(value: number, fmt: string): string {
     // already answered; asking it a second time off the raw format text is
     // how the two answers drift apart (a "$" prefix defeated the old test).
     // The blanked fraction area stays between the number and the suffix.
+    // Same sign rule as below: Math.trunc(-0.1) is -0, so the sign comes from
+    // the value, and a format that writes its own "-" is left to it.
+    const wholeSign = value < 0 && !head.prefix.includes("-") ? "-" : ""
+    const wholeText = wholeSign + head.prefix + String(Math.abs(intPart))
     if (hasIntPart && intPart !== 0) {
-      return head.prefix + String(intPart) + tail
+      return wholeText + tail
     }
-    return head.prefix + String(intPart) + "      " + tail // padded like Excel
+    return wholeText + "      " + tail // padded like Excel
   }
 
   // Build the formatted string.
@@ -698,7 +702,7 @@ function formatFraction(value: number, fmt: string): string {
   const numStr = String(bestNum).padStart(fracMatch[1].length, " ")
   const denStr = String(bestDen).padStart(fracMatch[2].length, " ")
 
-  return head.prefix + sign + whole + numStr + "/" + denStr + tail
+  return sign + head.prefix + whole + numStr + "/" + denStr + tail
 }
 
 function findBestFraction(value: number, maxDen: number): { num: number; den: number } {
@@ -808,12 +812,11 @@ function formatNumber(value: number, fmt: string, locale?: LocaleFormat): string
   }
 
   // Combine
-  let result = prefix
-  if (isNegative && !prefix.includes("-")) {
-    // Only add minus if the format doesn't already write one itself
-    result += "-"
-  }
-  result += localizedInt + localizedDec + suffix
+  // With a single section the minus sign leads everything, literal text
+  // included: "$#,##0.00" shows -1234.5 as "-$1,234.50" (as numfmt and SSF
+  // do). A format that writes its own "-" is left to it.
+  const sign = isNegative && !prefix.includes("-") ? "-" : ""
+  const result = sign + prefix + localizedInt + localizedDec + suffix
 
   return result
 }

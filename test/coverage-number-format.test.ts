@@ -549,11 +549,11 @@ describe("formatValue — Excel parity", () => {
     expect(formatValue(2.5, '# ??/??" in"')).toBe("2  1/ 2 in")
   })
 
-  // The prefix leads the sign, as it does for "$#,##0.00" — the two paths
+  // The sign leads the prefix, as it does for "$#,##0.00", so the two paths
   // agree on where the minus goes.
-  it("writes a literal prefix ahead of the sign", () => {
-    expect(formatValue(-2.5, "$# ?/?")).toBe("$-2 1/2")
-    expect(formatValue(-2.5, "$#,##0.00")).toBe("$-2.50")
+  it("writes the sign ahead of a literal prefix", () => {
+    expect(formatValue(-2.5, "$# ?/?")).toBe("-$2 1/2")
+    expect(formatValue(-2.5, "$#,##0.00")).toBe("-$2.50")
   })
 
   // Whole numbers and zero take an earlier exit out of the formatter; the
