@@ -680,16 +680,25 @@ Code that walks a sheet generically — `sheetToObjects`, `toHtml`,
 `row[i] ?? null` rather than assume a slot exists. That is what they all
 do; it is written down here because nothing said so.
 
-The streaming readers _do_ agree: `streamXlsxRows` and `streamOdsRows`
-both skip an entirely empty row and keep the true index on `StreamRow`,
-so a gap in the indexes is the signal.
+The streaming readers _do_ agree: `streamXlsxRows`, `streamXlsRows` and
+`streamOdsRows` all skip an entirely empty row and keep the true index on
+`StreamRow`, so a gap in the indexes is the signal.
 
-They do **not** agree on how many sheets they walk. `streamXlsxRows`
-yields one sheet — the first, unless `sheet` names another —
+They do **not** agree on how many sheets they walk. `streamXlsxRows` and
+`streamXlsRows` yield one sheet — the first, unless `sheet` names another —
 while `streamOdsRows` walks every sheet in the document and tags each row
 with `sheetIndex`. So the same loop over a three-sheet workbook gives you
-one sheet of it as `.xlsx` and all three as `.ods`, silently. Pass
-`sheet` when you mean one, and read `row.sheetIndex` when you mean all.
+one sheet of it as `.xlsx` or `.xls` and all three as `.ods`, silently.
+Pass `sheet` when you mean one, and read `row.sheetIndex` when you mean all.
+
+`streamXlsRows` reads the `.xls` itself whole, since a CFB container needs
+random access, and streams the sheet out of it, so its memory follows the
+file and its shared strings rather than the sheet. To stream, the cells
+have to come in row order — the order BIFF lays its row blocks out in,
+and the one Excel writes.
+A sheet whose records go back a row is buffered and yielded in order
+instead, holding its cells as `readXls` would, under the same
+`maxTotalCells` bound.
 
 ### `streamXmlRows` gives you a row's own keys, not a rectangle
 
