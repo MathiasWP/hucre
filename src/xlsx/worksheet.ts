@@ -1,6 +1,7 @@
 // ── Worksheet Parser ─────────────────────────────────────────────────
 // Parses xl/worksheets/sheetN.xml into a Sheet object.
 
+import { readPasswordDigest } from "./password"
 import type {
   ReadWarning,
   Sheet,
@@ -1629,14 +1630,17 @@ export async function parseWorksheetStream(
 function parseSheetProtectionAttrs(attrs: Record<string, string>): SheetProtection {
   const prot: SheetProtection = {}
 
-  // password is stored as hex hash — we store it as-is (hashed form)
-  // We do NOT store it as the `password` field since that's the raw plaintext in our API.
-  // Instead we skip it — the hash is one-way and can't be reversed.
-  // The presence of a password attr just means the sheet was password-protected.
+  // The digest goes to `digest`, never `password`: `password` is the
+  // plaintext the writer hashes. Dropping it changed the template's lock on
+  // open -> save (#622).
+  const digest = readPasswordDigest(attrs, "")
+  if (digest) prot.digest = digest
 
-  if (attrs["sheet"] === "1" || attrs["sheet"] === "true") {
-    prot.sheet = true
-  }
+  // `sheet` defaults to false (§18.3.1.85) and the writer treats an absent
+  // `sheet` as true, so an element without sheet="1" has to read as false.
+  // Left undefined, a digest-only <sheetProtection password objects="1"/>
+  // came back out locked under the original password (#622).
+  prot.sheet = attrs["sheet"] === "1" || attrs["sheet"] === "true"
   if (attrs["objects"] === "1" || attrs["objects"] === "true") {
     prot.objects = true
   }
@@ -1676,6 +1680,7 @@ function parseSheetProtectionAttrs(attrs: Record<string, string>): SheetProtecti
 // ── Data Validation Builder ─────────────────────────────────────────
 
 const VALID_TYPES = new Set<string>([
+  "none",
   "list",
   "whole",
   "decimal",
@@ -1700,8 +1705,11 @@ function buildDataValidation(
   formula1Text: string,
   formula2Text: string,
 ): DataValidation | null {
-  const typeStr = attrs["type"]
-  if (!typeStr || !VALID_TYPES.has(typeStr)) return null
+  // `type` is optional and defaults to "none" (§18.3.1.32). Excel writes
+  // input-message-only validations without it; returning null here dropped
+  // them on open -> save (#622). An unknown explicit type is still skipped.
+  const typeStr = attrs["type"] ?? "none"
+  if (!VALID_TYPES.has(typeStr)) return null
 
   const sqref = attrs["sqref"]
   if (!sqref) return null

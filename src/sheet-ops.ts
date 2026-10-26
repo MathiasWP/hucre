@@ -1032,6 +1032,7 @@ export function cloneSheet(sheet: Sheet, newName: string): Sheet {
   // Copy protection
   if (sheet.protection) {
     cloned.protection = { ...sheet.protection }
+    if (sheet.protection.digest) cloned.protection.digest = { ...sheet.protection.digest }
   }
 
   // Copy pageSetup

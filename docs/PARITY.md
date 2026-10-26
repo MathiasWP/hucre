@@ -564,14 +564,14 @@ total made Excel repair the file and drop the row. Fixed in #604.
 
 ### Write-only, by design
 
-| field                                                     | why                                                                                                                                                                        |
-| --------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `WriteOptions.vbaProject`                                 | attaches a macro project; `Workbook` has no counterpart, so `readXlsx` → `writeXlsx` **drops macros silently**. Use `openXlsx`/`saveXlsx` to edit a macro-enabled workbook |
-| `WriteOptions.encryption`                                 | a property of the container, not of the workbook. Read back with `ReadOptions.password`                                                                                    |
-| `WriteOptions.stringMode`                                 | an encoding choice with nothing to surface on read                                                                                                                         |
-| `WriteSheet.data`                                         | the object form of `rows`; comes back as `rows`                                                                                                                            |
-| `WriteSheet.a11y`                                         | authoring metadata. `a11y.summary` is promoted to `properties.description` and does survive; `a11y.headerRow` has no cell to live in                                       |
-| `SheetProtection.password`, `workbookProtection.password` | the file holds a one-way digest, never the password. The digest is read; the password cannot be                                                                            |
+| field                                                     | why                                                                                                                                                                                                                                                                                                                                                                      |
+| --------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `WriteOptions.vbaProject`                                 | attaches a macro project; `Workbook` has no counterpart, so `readXlsx` → `writeXlsx` **drops macros silently**. Use `openXlsx`/`saveXlsx` to edit a macro-enabled workbook                                                                                                                                                                                               |
+| `WriteOptions.encryption`                                 | a property of the container, not of the workbook. Read back with `ReadOptions.password`                                                                                                                                                                                                                                                                                  |
+| `WriteOptions.stringMode`                                 | an encoding choice with nothing to surface on read                                                                                                                                                                                                                                                                                                                       |
+| `WriteSheet.data`                                         | the object form of `rows`; comes back as `rows`                                                                                                                                                                                                                                                                                                                          |
+| `WriteSheet.a11y`                                         | authoring metadata. `a11y.summary` is promoted to `properties.description` and does survive; `a11y.headerRow` has no cell to live in                                                                                                                                                                                                                                     |
+| `SheetProtection.password`, `workbookProtection.password` | the file holds a one-way digest, never the password. The digest is read into `protection.digest` / `workbookProtection.digest` (and `revisionsDigest`, with `lockRevision` and the password character sets) and written back unchanged on `openXlsx` → `saveXlsx`; the password cannot be recovered. A plaintext `password` set before saving wins over a carried digest |
 
 ### A column with no width comes back with one
 
@@ -597,6 +597,22 @@ exact; what is lost is only which of the two it was, and Excel shows the
 column the same either way. Dropping `customWidth` when the width equals
 the default would fix only the columns hucre defaulted, not the ones Excel
 did, so it is not done; the real fix is a field on `ColumnDef`.
+
+### A `<col min max>` range is read per column and written as a range
+
+The reader expands `<col min="2" max="16384">` into one `ColumnDef` per
+column (the `ColumnDef` API has no range), and the writers — `writeXlsx`,
+`saveXlsx` and the stream writer — merge adjacent columns whose attributes
+are all identical back into one `<col min max>`. A B:XFD template therefore
+round-trips as one element, not 16,383. Columns that differ are not merged,
+so the merge changes the XML, never what Excel shows. Fixed in #622.
+
+### A `<dataValidation>` with no `type` reads as `type: "none"`
+
+`type` is optional in the schema and defaults to `none` (§18.3.1.32), which
+is how Excel stores a validation that only shows an input message.
+`ValidationType` includes `"none"`, and the writer leaves the attribute off
+for it. Fixed in #622.
 
 ### Auto-filter criteria, and the two kinds that are not carried
 
