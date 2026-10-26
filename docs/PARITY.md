@@ -385,6 +385,30 @@ field to either interface fails `tsc` until it is registered — as a probe
 that round-trips, or as a one-way entry with its reason. That register,
 not this list, is the thing that stays current.
 
+### Newer functions read back with their `_xlfn.` prefix
+
+Functions added after Excel 2007 are stored under a prefixed name —
+`_xlfn.XLOOKUP`, `_xlfn.IFS`, `_xlfn._xlws.FILTER` — that Excel hides in
+the formula bar. The writer adds the prefix to cell, conditional
+formatting, data validation, table total and defined name formulas, and
+the reader keeps formula text as the file has it. So a formula written as
+`XLOOKUP(…)` reads back as `_xlfn.XLOOKUP(…)`: the same formula, but a
+strict equality check on a round trip sees the difference. Writing the
+prefixed form again does not prefix it twice (#597).
+
+The names LET and LAMBDA bind get theirs too: `LET(x,2,x*3)` is written
+`_xlfn.LET(_xlpm.x,2,_xlpm.x*3)`, and an optional `[b]` is bound as
+`_xlop.b`. A use of a bound name is written in the spelling of its
+binding, as Excel writes it, so `LET(Ab,2,aB)` reads back as
+`_xlfn.LET(_xlpm.Ab,2,_xlpm.Ab)`.
+
+One prefix is not added: a function passed as an argument rather than
+called, as in `GROUPBY(A2:A3,B2:B3,SUM)`, is stored `_xleta.SUM`. hucre
+writes it as given, and Excel computes `#NAME?` for it. Telling such a
+name from a defined name of the same spelling needs Excel's whole
+function list. Pass a LAMBDA instead — `GROUPBY(A2:A3,B2:B3,LAMBDA(x,SUM(x)))`
+— which is written in its stored form.
+
 ### Styles read out of a file are shared, not copied
 
 `readXlsx(…, { readStyles: true })` gives every cell its own `CellStyle`

@@ -4,6 +4,7 @@
 import type { TableDefinition } from "../_types"
 import { parseRange } from "../cell-utils"
 import { xmlDocument, xmlElement, xmlSelfClose, xmlEscape } from "../xml/writer"
+import { addFuturePrefixes } from "./formula-prefix"
 
 const NS_SPREADSHEET = "http://schemas.openxmlformats.org/spreadsheetml/2006/main"
 
@@ -77,9 +78,14 @@ export function writeTable(
       colAttrs["totalsRowLabel"] = col.totalLabel
     }
 
-    // Custom formula in total row
+    // Custom formula in total row, in the stored form a cell formula
+    // takes: `_xlfn.` on newer functions (#597).
     if (showTotalRow && col.totalFunction === "custom" && col.totalFormula) {
-      const formulaChild = xmlElement("totalsRowFormula", undefined, xmlEscape(col.totalFormula))
+      const formulaChild = xmlElement(
+        "totalsRowFormula",
+        undefined,
+        xmlEscape(addFuturePrefixes(col.totalFormula)),
+      )
       colElements.push(xmlElement("tableColumn", colAttrs, [formulaChild]))
     } else {
       colElements.push(xmlSelfClose("tableColumn", colAttrs))

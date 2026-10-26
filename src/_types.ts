@@ -215,6 +215,16 @@ export interface Cell {
    * raw `TRUE`/`FALSE` value.
    */
   checkbox?: boolean
+  /**
+   * Formula text in the form the file stores it. Functions newer than
+   * Excel 2007 are stored with a prefix (`_xlfn.XLOOKUP`,
+   * `_xlfn._xlws.FILTER`) that Excel hides in the formula bar. The writer
+   * adds it, so `XLOOKUP(…)` and `_xlfn.XLOOKUP(…)` write the same file,
+   * and a read hands back the prefixed form (#597). Conditional
+   * formatting, data validation, table total and defined name formulas
+   * are treated the same way, and so are the names LET and LAMBDA bind,
+   * stored as `_xlpm.x` (`_xlop.x` for an optional `[x]` parameter).
+   */
   formula?: string
   formulaResult?: CellValue
   /**
@@ -430,7 +440,12 @@ export interface SplitPane {
 
 export interface NamedRange {
   name: string
-  /** Cell range reference (e.g. "Sheet1!$A$1:$D$10") */
+  /**
+   * Cell range reference (e.g. "Sheet1!$A$1:$D$10"), or any formula a
+   * defined name can hold. Newer functions get their `_xlfn.` prefix on
+   * write, and a named LAMBDA's parameters their `_xlpm.`, as in
+   * `Cell.formula` (#597).
+   */
   range: string
   /** Scope: undefined = workbook level, string = sheet name */
   scope?: string
