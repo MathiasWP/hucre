@@ -11,7 +11,16 @@ import { MAX_COL_INDEX, MAX_ROW_INDEX, MAX_TOTAL_CELLS } from "../limits"
 import { readInputToUint8Array } from "../_input"
 import { readCfb } from "../xlsx/crypto/cfb"
 import { isBuiltinDateFormatId, isDateFormat, serialToDate } from "../_date"
-import { decodeRk, parseRecords, parseSst, Reader, SID, type BiffRecord } from "./biff"
+import {
+  decodeChars,
+  decodeRk,
+  parseSst,
+  Reader,
+  RecordCursor,
+  recordStarts,
+  SID,
+  type BiffRecord,
+} from "./biff"
 import { codepageDecoder } from "./codepage"
 
 const ERROR_TEXT: Record<number, string> = {
@@ -106,8 +115,9 @@ function biff5Strings(decode: (bytes: Uint8Array) => string): BiffStrings {
  * of the globals pass because the strings that pass decodes — sheet names,
  * format codes — may in principle precede it.
  */
-function findCodepage(records: BiffRecord[]): number | undefined {
-  for (const rec of records) {
+function findCodepage(stream: Uint8Array): number | undefined {
+  const cursor = new RecordCursor(stream)
+  for (let rec = cursor.next(); rec; rec = cursor.next()) {
     if (rec.id === SID.EOF) return undefined
     if (rec.id === SID.CODEPAGE) {
       if (rec.data.length < 2) throw new ParseError("Invalid XLS: CODEPAGE record is too short")
@@ -118,7 +128,7 @@ function findCodepage(records: BiffRecord[]): number | undefined {
 }
 
 function parseWorkbookRecords(stream: Uint8Array, options?: ReadOptions): Workbook {
-  const records = parseRecords(stream)
+  const cursor = new RecordCursor(stream)
 
   // ── BIFF version gate ──
   // The first record is the workbook globals BOF; its first u16 is the BIFF
@@ -126,7 +136,7 @@ function parseWorkbookRecords(stream: Uint8Array, options?: ReadOptions): Workbo
   // are Excel 5.0 and 95 — the same record layout except that strings are
   // code-page bytes and there is no shared-string table. Anything else is
   // rejected rather than misread.
-  const bof = records[0]
+  const bof = cursor.next()
   if (!bof || bof.id !== SID.BOF) {
     throw new ParseError("Invalid XLS: missing BOF record at start of Workbook stream")
   }
@@ -145,28 +155,18 @@ function parseWorkbookRecords(stream: Uint8Array, options?: ReadOptions): Workbo
   // any string is read, so a bad page fails here rather than mid-sheet.
   const strings: BiffStrings =
     biffVersion === BIFF5
-      ? biff5Strings(
-          codepageDecoder(findCodepage(records) ?? options?.codepage ?? DEFAULT_CODEPAGE),
-        )
+      ? biff5Strings(codepageDecoder(findCodepage(stream) ?? options?.codepage ?? DEFAULT_CODEPAGE))
       : BIFF8_STRINGS
 
-  const offsetToIndex = new Map<number, number>()
-  for (let i = 0; i < records.length; i++) offsetToIndex.set(records[i].offset, i)
-
-  // ── Globals substream (records[0] = BOF … first EOF) ──
+  // ── Globals substream (BOF … first EOF) ──
   let date1904 = options?.dateSystem === "1904"
   const xfFmtIds: number[] = []
   const fmtCodes = new Map<number, string>()
   const boundSheets: Array<{ name: string; pos: number }> = []
   const sst: string[] = []
 
-  let gi = 0
-  for (; gi < records.length; gi++) {
-    const rec = records[gi]
-    if (rec.id === SID.EOF) {
-      gi++
-      break
-    }
+  for (let rec: BiffRecord | undefined = bof; rec; rec = cursor.next()) {
+    if (rec.id === SID.EOF) break
     switch (rec.id) {
       case SID.DATEMODE: {
         if (!options?.dateSystem || options.dateSystem === "auto") {
@@ -199,9 +199,9 @@ function parseWorkbookRecords(stream: Uint8Array, options?: ReadOptions): Workbo
       case SID.SST: {
         const blocks: Uint8Array[] = [rec.data]
         // Gather trailing CONTINUE records belonging to the SST.
-        for (let j = gi + 1; j < records.length; j++) {
-          if (records[j].id !== SID.CONTINUE) break
-          blocks.push(records[j].data)
+        for (let next = cursor.peek(); next?.id === SID.CONTINUE; next = cursor.peek()) {
+          blocks.push(next.data)
+          cursor.next()
         }
         // A loop, not `push(...parseSst(blocks))`: spreading an array as
         // arguments puts one stack slot per element, so a workbook with a
@@ -233,17 +233,19 @@ function parseWorkbookRecords(stream: Uint8Array, options?: ReadOptions): Workbo
   const isDate = (ixfe: number): boolean => dateXf[ixfe] === true
 
   // ── Sheet substreams ──
+  const starts = recordStarts(
+    stream,
+    boundSheets.map((bs) => bs.pos),
+  )
   const sheets: Sheet[] = []
   for (const bs of boundSheets) {
-    const startIdx = offsetToIndex.get(bs.pos)
-    if (startIdx === undefined) {
+    if (!starts.has(bs.pos)) {
       sheets.push({ name: bs.name, rows: [] })
       continue
     }
     sheets.push(
       parseSheet(
-        records,
-        startIdx,
+        new RecordCursor(stream, bs.pos),
         bs.name,
         sst,
         strings,
@@ -258,8 +260,7 @@ function parseWorkbookRecords(stream: Uint8Array, options?: ReadOptions): Workbo
 }
 
 function parseSheet(
-  records: BiffRecord[],
-  startIdx: number,
+  cursor: RecordCursor,
   name: string,
   sst: string[],
   strings: BiffStrings,
@@ -304,8 +305,8 @@ function parseSheet(
     setCell(row, col, isDate(ixfe) ? serialToDate(n, date1904) : n)
   }
 
-  for (let i = startIdx + 1; i < records.length; i++) {
-    const rec = records[i]
+  cursor.skip() // the sheet's BOF
+  for (let rec = cursor.next(); rec; rec = cursor.next()) {
     if (rec.id === SID.EOF) break
     const r = new Reader(rec.data)
     switch (rec.id) {
@@ -374,7 +375,7 @@ function parseSheet(
             setCell(row, col, ERROR_TEXT[b[2]] ?? "#ERR!") // error
           else if (kind === 0) {
             // string: value is in the following STRING record
-            const next = records[i + 1]
+            const next = cursor.peek()
             if (next && next.id === SID.STRING)
               setCell(row, col, strings.long(new Reader(next.data)))
           }
@@ -449,6 +450,15 @@ function readShortString(r: Reader): string {
 function readChars(r: Reader, cch: number): string {
   const grbit = r.u8()
   const compressed = (grbit & 0x01) === 0
+  const bytes = compressed ? cch : cch * 2
+  if (bytes <= r.remaining()) {
+    const s = decodeChars(r.buf, r.pos, cch, compressed)
+    r.skip(bytes)
+    return s
+  }
+  // A string running past its record — truncated, or a long formula result
+  // continued into a CONTINUE record, which is not followed here — reads
+  // as it always has, a character at a time.
   let s = ""
   for (let i = 0; i < cch; i++) s += String.fromCharCode(compressed ? r.u8() : r.u16())
   return s

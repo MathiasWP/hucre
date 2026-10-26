@@ -39,6 +39,7 @@ const rkInt = (v: number): number[] => u32(((v << 2) | 2) >>> 0)
 const SID = {
   FORMULA: 0x0006,
   EOF: 0x000a,
+  CONTINUE: 0x003c,
   DATEMODE: 0x0022,
   FORMAT: 0x041e,
   NUMBER: 0x0203,
@@ -228,6 +229,113 @@ describe("XLS (BIFF8) reader", () => {
     const stream = concat([bof3, eof()])
     const data = writeCfb([{ name: "Workbook", data: stream }])
     await expect(readXls(data)).rejects.toThrow(/BIFF 0x300/)
+  })
+})
+
+// ── Strings decoded a run at a time ──────────────────────────────────
+// Text is decoded a record's worth of characters at a time, not one by
+// one. Excel splits a long shared string wherever its record fills, and
+// each CONTINUE that resumes one restarts with its own flag byte, so a
+// string can change width mid-way and a surrogate pair can be cut in two.
+// These pass on main as well: they pin what the faster path must keep.
+
+const latin = (s: string): number[] => [...s].map((c) => c.charCodeAt(0))
+function utf16(s: string): number[] {
+  const out: number[] = []
+  for (let i = 0; i < s.length; i++) out.push(...u16(s.charCodeAt(i)))
+  return out
+}
+const generalXf = (): number[] =>
+  record(SID.XF, [...u16(0), ...u16(0), ...Array.from({ length: 16 }, () => 0)])
+
+/** One sheet after the given globals records, its BOUNDSHEET pointing at it. */
+function oneSheetXls(globals: number[][], sheet: number[][], sheetName = "Sheet1"): Uint8Array {
+  const makeGlobals = (sheetPos: number): Uint8Array =>
+    concat([
+      bof(0x0005),
+      ...globals,
+      record(SID.BOUNDSHEET, [...u32(sheetPos), 0, 0, ...shortStr(sheetName)]),
+      eof(),
+    ])
+  const globalsStream = makeGlobals(makeGlobals(0).length)
+  return writeCfb([
+    { name: "Workbook", data: concat([globalsStream, bof(0x0010), ...sheet, eof()]) },
+  ])
+}
+
+describe("XLS (BIFF8) strings", () => {
+  it("joins a shared string's runs across CONTINUE records, whatever their width", async () => {
+    // 100 one-byte characters in the SST record, a CONTINUE record full of
+    // them (more than one String.fromCharCode call takes), then a switch
+    // to UTF-16 for the rest. The next string's surrogate pair straddles
+    // the following boundary.
+    const head = "A".repeat(100)
+    const middle = "B".repeat(8223)
+    const tail = "Ж".repeat(1677)
+    const emoji = "ab😀cd"
+    const xls = oneSheetXls(
+      [
+        generalXf(),
+        record(SID.SST, [...u32(3), ...u32(3), ...u16(10_000), 0, ...latin(head)]),
+        record(SID.CONTINUE, [0, ...latin(middle)]),
+        record(SID.CONTINUE, [
+          1,
+          ...utf16(tail),
+          ...u16(emoji.length),
+          1,
+          ...utf16(emoji.slice(0, 3)),
+        ]),
+        record(SID.CONTINUE, [1, ...utf16(emoji.slice(3)), ...u16(3), 0, ...latin("end")]),
+      ],
+      [0, 1, 2].map((i) => record(SID.LABELSST, [...u16(0), ...u16(i), ...u16(0), ...u32(i)])),
+    )
+
+    const wb = await readXls(xls)
+
+    expect(wb.sheets[0].rows[0]).toEqual([head + middle + tail, emoji, "end"])
+  })
+
+  it("reads inline text in either width, longer than one String.fromCharCode call takes", async () => {
+    const long = "x".repeat(8200)
+    const xls = oneSheetXls(
+      [generalXf()],
+      [
+        record(SID.LABEL, [...u16(0), ...u16(0), ...u16(0), ...xlStr(long)]),
+        record(SID.LABEL, [...u16(0), ...u16(1), ...u16(0), ...u16(5), 1, ...utf16("Ωmega")]),
+      ],
+    )
+
+    const wb = await readXls(xls)
+
+    expect(wb.sheets[0].rows[0]).toEqual([long, "Ωmega"])
+  })
+})
+
+describe("XLS (BIFF8) sheet offsets", () => {
+  it("reads a sheet whose BOUNDSHEET offset misses a record boundary as empty", async () => {
+    // The offset is the only link from a BOUNDSHEET to its sheet. Records
+    // are walked in place now rather than indexed by offset, and one that
+    // lands inside a record still means no rows, not records out of phase.
+    const makeGlobals = (sheetPos: number): Uint8Array =>
+      concat([
+        bof(0x0005),
+        generalXf(),
+        record(SID.BOUNDSHEET, [...u32(sheetPos), 0, 0, ...shortStr("Good")]),
+        record(SID.BOUNDSHEET, [...u32(sheetPos + 2), 0, 0, ...shortStr("Off")]),
+        eof(),
+      ])
+    const globals = makeGlobals(makeGlobals(0).length)
+    const sheet = concat([
+      bof(0x0010),
+      record(SID.LABEL, [...u16(0), ...u16(0), ...u16(0), ...xlStr("Hi")]),
+      eof(),
+    ])
+
+    const wb = await readXls(writeCfb([{ name: "Workbook", data: concat([globals, sheet]) }]))
+
+    expect(wb.sheets.map((s) => s.name)).toEqual(["Good", "Off"])
+    expect(wb.sheets[0].rows).toEqual([["Hi"]])
+    expect(wb.sheets[1].rows).toEqual([])
   })
 })
 
