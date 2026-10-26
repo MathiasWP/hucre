@@ -36,6 +36,19 @@ import { toCellValue } from "../_inline-cells"
 import { computeTableRange } from "./derived-ranges"
 import { totalRowCells } from "./table-writer"
 
+// ── Column Width ──────────────────────────────────────────────────
+
+/**
+ * The `<col width>` for a column that has a `<col>` but no width of its
+ * own: Windows Excel's default for Calibri 11, 8.43 characters shown.
+ *
+ * `width` is optional in the schema, but Excel reads a `<col>` without it
+ * as zero wide, so a column given only a style or an outline level came
+ * out hidden. Excel itself always writes one, even for a column that only
+ * has a format. See #603.
+ */
+export const DEFAULT_COL_WIDTH = 9.140625
+
 // ── Hyperlink Relationship ────────────────────────────────────────
 
 export interface HyperlinkRelationship {
@@ -487,6 +500,8 @@ export function writeWorksheetXml(
         if (effectiveWidth !== undefined) {
           colAttrs["width"] = effectiveWidth
           colAttrs["customWidth"] = true
+        } else {
+          colAttrs["width"] = sheet.defaultColWidth ?? DEFAULT_COL_WIDTH
         }
         if (columnStyleId !== 0) {
           colAttrs["style"] = columnStyleId
